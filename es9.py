@@ -30,15 +30,13 @@ class UserCode:
 
         self.Kp_psi = 1.0
         self.Kp_xy = 2.0
+        self.Kp_xy_sq = 0.1
+        self.Kd_xy = 0.4
 
         self.wp_idx = 0
         self.wp_dist = 0.5
         self.t = 0.0
 
-    def get_markers(self):
-        '''
-        place up to 30 markers in the world
-        '''
         self.waypoints = [
             # M
             [1.5, 0.5],
@@ -65,6 +63,37 @@ class UserCode:
             [8.0, 11.0],
             [6.5, 11.0],
         ]
+        self.wp_vel = [
+            # M
+            [1.0, 0.0],
+            [1.0, 0.0],
+            [0.0, 0.0],
+            [-0.7, 0.7],
+            [0.0, 0.0],
+            [1.0, 0.0],
+            [1.0, 0.0],
+
+            # U
+            [0.0, 0.0],
+            [-1.0, 0.0],
+            [0.0, 0.5],
+            [1.0, 0.0],
+            [0.5, 0.0],
+            [1.0, 0.0],
+            [0.8, 0.1],
+
+            # T
+            [0.0, 0.5],
+            [0.0, 1.0],
+            [-0.5, 0.0],
+            [-1.0, 0.0],
+            [0.0, 0.0],
+        ]
+
+    def get_markers(self):
+        '''
+        place up to 30 markers in the world
+        '''
         markers = self.waypoints + [
             [0.0, 0.0],
 
@@ -79,6 +108,12 @@ class UserCode:
     def next_wp(self):
         if self.wp_idx < len(self.waypoints):
             return self.waypoints[self.wp_idx]
+        else:
+            return None
+
+    def next_vel(self):
+        if self.wp_idx < len(self.waypoints):
+            return self.wp_vel[self.wp_idx]
         else:
             return None
 
@@ -111,6 +146,9 @@ class UserCode:
         while(y < -math.pi):
             y += 2 * math.pi
         return y
+
+    def normalizeVect(self, x):
+        return x / math.sqrt(np.dot(x.T, x)[0, 0])
 
     def visualizeState(self):
         # visualize position state
@@ -239,10 +277,18 @@ class UserCode:
 
         wp = self.next_wp()
         if wp is not None:
-            target = np.array([self.next_wp()]).T
-            return self.Kp_xy * (target - self.x[0:2, 0]), self.Kp_psi * (-self.x[2, 0])
+            target = np.array([wp]).T
+            target_vel = np.array([self.next_vel()]).T
+            rot = self.rotation(-self.x[2, 0])
+            #xy_P = self.Kp_xy * np.dot(rot, self.normalizeVect(target - self.x[0:2, 0]))
+            xy_vect = np.dot(rot, target - self.x[0:2, 0])
+            xy_norm = math.sqrt(np.dot(xy_vect.T, xy_vect)[0, 0])
+            xy_dir = xy_vect / xy_norm
+            xy_P = (self.Kp_xy + self.Kp_xy_sq * xy_norm) * xy_vect
+            xy_D = self.Kd_xy * np.dot(rot, target_vel - linear_velocity)
+            return xy_P + xy_D, 0.0  # self.Kp_psi * (-self.x[2, 0])
         else:
-            return np.zeros(2,1), 2.4
+            return np.zeros(2,1), 0.0
 
     def measurement_callback(self, marker_position_world, marker_yaw_world, marker_position_relative, marker_yaw_relative):
         '''
