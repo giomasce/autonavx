@@ -90,14 +90,25 @@ class UserCode:
             [0.0, 0.0],
         ]
 
+    def selectDesiredSpeed(self):
+        return self.rv_norm + 6.0
+
     def computeControlDecoupled(self):
-        pass
+        baseVect = self.normalizeVect(self.target - self.base)
+        rot = np.hstack([baseVect, np.dot(np.array([[0, -1], [1, 0]]), baseVect)])
+        vel = np.dot(rot.T, self.rv)
+        cont = np.array([[self.selectDesiredSpeed()], [-self.Kd_xy * vel[1, 0]]])
+        return np.dot(rot, cont)
 
     def computeControl(self):
+        self.base = np.array([[0.0], [0.0]])
+        self.target = np.array([[4.5], [0.5]])
         rot = self.rotation(self.x[2, 0])
         self.rv = np.dot(rot, self.lv)
+        self.rv_norm = self.computeNorm(self.rv)
 
-        return self.computeControlDecoupled()
+        xy_cont = self.computeControlDecoupled()
+        return np.dot(rot.T, xy_cont), 0.0
 
         wp = self.next_wp()
         if wp is not None:
@@ -170,13 +181,17 @@ class UserCode:
             y += 2 * math.pi
         return y
 
+    def computeNorm(self, x):
+        return math.sqrt(np.dot(x.T, x)[0, 0])
+
     def normalizeVect(self, x):
-        return x / math.sqrt(np.dot(x.T, x)[0, 0])
+        return x / self.computeNorm(x)
 
     def visualizeState(self):
         # visualize position state
         plot_trajectory("kalman", self.x[0:2])
         plot_covariance_2d("kalman", self.sigma[0:2,0:2])
+        plot("speed", self.rv_norm)
 
     def predictState(self, dt, x, u_linear_velocity, u_yaw_velocity):
         '''
@@ -298,9 +313,10 @@ class UserCode:
 
         self.verify_wp()
 
+        controls = self.computeControl()
         self.visualizeState()
 
-        return self.computeControl()
+        return controls
 
     def measurement_callback(self, marker_position_world, marker_yaw_world, marker_position_relative, marker_yaw_relative):
         '''
