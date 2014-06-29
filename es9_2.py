@@ -29,15 +29,13 @@ class UserCode:
         self.sigma = 0.01 * np.identity(3)
 
         self.Kp_psi = 1.0
-        self.Kp_xy = 3.0
-        self.Kp_xy_sq = 0.0
+        self.Kp_xy = 2.0
+        self.Kp_xy_sq = 0.1
         self.Kd_xy = 0.4
 
         self.wp_idx = 0
         self.wp_dist = 0.5
         self.t = 0.0
-
-        self.cap = 4.5
 
         self.waypoints = [
             # M
@@ -65,42 +63,11 @@ class UserCode:
             [8.0, 11.0],
             [6.5, 11.0],
         ]
-        self.perturbed_waypoints = [
-            # M
-            [1.5, 0.5],
-            [3.0, 0.5],
-            [4.5, 0.7],
-            [3.5, 2.0],
-            [2.0, 2.8],
-            [3.0, 3.5],
-            [5.5, 4.0],
-
-            # U
-            [6.5, 5.0],
-            [5.5, 5.5],
-            [4.5, 5.75],
-            [4.0, 7.0],
-            [4.0, 8.0],
-            [5.5, 8.5],
-            [9.0, 8.5],
-
-            # T
-            [9.0, 9.5],
-            [9.5, 11.0],
-            [9.5, 12.0],
-            [8.0, 11.0],
-            [5.5, 10.0],
-        ]
-        self.real_next_wp = [
-            2, 2, 2, 4, 4, 6, 6,
-            7, 9, 9, 11, 11, 13, 13,
-            14, 16, 16, 18, 18
-            ]
         self.wp_vel = [
             # M
             [1.0, 0.0],
             [1.0, 0.0],
-            [0.0, 0.5],
+            [0.0, 0.0],
             [-0.7, 0.7],
             [0.0, 0.0],
             [1.0, 0.0],
@@ -109,7 +76,7 @@ class UserCode:
             # U
             [0.0, 0.0],
             [-1.0, 0.0],
-            [0.0, 0.0],
+            [0.0, 0.5],
             [1.0, 0.0],
             [0.5, 0.0],
             [1.0, 0.0],
@@ -118,10 +85,33 @@ class UserCode:
             # T
             [0.0, 0.5],
             [0.0, 1.0],
-            [0.0, 0.0],
+            [-0.5, 0.0],
             [-1.0, 0.0],
             [0.0, 0.0],
         ]
+
+    def computeControlDecoupled(self):
+        pass
+
+    def computeControl(self):
+        rot = self.rotation(self.x[2, 0])
+        self.rv = np.dot(rot, self.lv)
+
+        return self.computeControlDecoupled()
+
+        wp = self.next_wp()
+        if wp is not None:
+            target = np.array([wp]).T
+            target_vel = np.array([self.next_vel()]).T
+            #xy_P = self.Kp_xy * np.dot(rot, self.normalizeVect(target - self.x[0:2, 0]))
+            xy_vect = np.dot(rot, target - self.x[0:2, 0])
+            xy_norm = math.sqrt(np.dot(xy_vect.T, xy_vect)[0, 0])
+            xy_dir = xy_vect / xy_norm
+            xy_P = (self.Kp_xy + self.Kp_xy_sq * xy_norm) * xy_vect
+            xy_D = self.Kd_xy * np.dot(rot, target_vel - self.lv)
+            return xy_P + xy_D, 0.0  # self.Kp_psi * (-self.x[2, 0])
+        else:
+            return np.zeros(2,1), 0.0
 
     def get_markers(self):
         '''
@@ -140,20 +130,18 @@ class UserCode:
 
     def next_wp(self):
         if self.wp_idx < len(self.waypoints):
-            return self.perturbed_waypoints[self.real_next_wp[self.wp_idx]]
-            #return self.perturbed_waypoints[self.wp_idx]
+            return self.waypoints[self.wp_idx]
         else:
             return None
 
     def next_vel(self):
         if self.wp_idx < len(self.waypoints):
-            return self.wp_vel[self.real_next_wp[self.wp_idx]]
-            #return self.wp_vel[self.wp_idx]
+            return self.wp_vel[self.wp_idx]
         else:
             return None
 
     def verify_wp(self):
-        wp = self.waypoints[self.wp_idx]
+        wp = self.next_wp()
         if wp is None:
             return
         if (self.x[0] - wp[0])**2 + (self.x[1] - wp[1])**2 <= self.wp_dist**2:
@@ -184,12 +172,6 @@ class UserCode:
 
     def normalizeVect(self, x):
         return x / math.sqrt(np.dot(x.T, x)[0, 0])
-
-    def capVect(self, x, cap):
-        norm = math.sqrt(np.dot(x.T, x)[0, 0])
-        if norm > cap:
-            return x / norm * cap
-        return x
 
     def visualizeState(self):
         # visualize position state
@@ -308,6 +290,8 @@ class UserCode:
         '''
         self.t = t
         self.x = self.predictState(dt, self.x, linear_velocity, yaw_velocity)
+        self.lv = linear_velocity
+        self.yv = yaw_velocity
 
         F = self.calculatePredictStateJacobian(dt, self.x, linear_velocity, yaw_velocity)
         self.sigma = self.predictCovariance(self.sigma, F, self.Q);
@@ -316,24 +300,7 @@ class UserCode:
 
         self.visualizeState()
 
-        wp = self.next_wp()
-        if wp is not None:
-            target = np.array([wp]).T
-            target_vel = np.array([self.next_vel()]).T
-            rot = self.rotation(-self.x[2, 0])
-            #xy_P = self.Kp_xy * np.dot(rot, self.normalizeVect(target - self.x[0:2, 0]))
-            xy_vect = np.dot(rot, target - self.x[0:2, 0])
-            xy_norm = math.sqrt(np.dot(xy_vect.T, xy_vect)[0, 0])
-            xy_dir = xy_vect / xy_norm
-            xy_P = (self.Kp_xy + self.Kp_xy_sq * xy_norm) * xy_vect
-            xy_D = self.Kd_xy * (np.dot(rot, target_vel) - linear_velocity)
-            controls = xy_P + xy_D, 0.0  # self.Kp_psi * (-self.x[2, 0])
-        else:
-            controls = np.zeros(2,1), 0.0
-
-        controls = (self.capVect(controls[0], self.cap), controls[1])
-        #print controls[0], controls[1]
-        return controls
+        return self.computeControl()
 
     def measurement_callback(self, marker_position_world, marker_yaw_world, marker_position_relative, marker_yaw_relative):
         '''
