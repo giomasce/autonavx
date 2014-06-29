@@ -33,6 +33,7 @@ class UserCode:
         self.Kp_xy_sq = 0.1
         self.Kd_xy = 0.4
 
+        self.ev_idx = 0
         self.wp_idx = 0
         self.wp_dist = 0.5
         self.t = 0.0
@@ -89,6 +90,31 @@ class UserCode:
             [-1.0, 0.0],
             [0.0, 0.0],
         ]
+        self.events = [
+            (lambda: True,
+             lambda: self.setDecoupled(np.array([[0.0], [0.0]]),
+                                       np.array([[4.5], [0.5]]))),
+            (lambda: self.x[0, 0] >= 0.5,
+             lambda: self.setKeep()),
+            #(lambda: self.x[0, 0] >= 2.5,
+            # lambda: self.setStop(1.0)),
+            (lambda: self.x[0, 0] >= 4.0,
+             lambda: self.setDecoupled(np.array(self.x[0:2, 0]),
+                                       np.array([[1.5], [3.5]]))),
+            ]
+
+    def setDecoupled(self, base, target):
+        self.base = base
+        self.target = target
+        self.controller = self.computeControlDecoupled
+
+    def setStop(self, stopRate):
+        self.stopRate = stopRate
+        self.stopStartTime = self.t
+        self.controller = self.computeControlStop
+
+    def setKeep(self):
+        self.controller = self.computeControlKeep
 
     def selectDesiredSpeed(self):
         return self.rv_norm + 6.0
@@ -96,33 +122,50 @@ class UserCode:
     def computeControlDecoupled(self):
         baseVect = self.normalizeVect(self.target - self.base)
         rot = np.hstack([baseVect, np.dot(np.array([[0, -1], [1, 0]]), baseVect)])
+        pos = np.dot(rot.T, self.x[0:2, 0] - self.base)
         vel = np.dot(rot.T, self.rv)
-        cont = np.array([[self.selectDesiredSpeed()], [-self.Kd_xy * vel[1, 0]]])
+        cont = np.array([[self.selectDesiredSpeed()], [-self.Kp_xy * pos[1, 0]]])
         return np.dot(rot, cont)
 
+    def computeControlStop(self):
+        #return np.array([[0.0], [0.0]])
+        direct = self.rv / self.rv_norm
+        if self.rv_norm <= 3.0:
+            norm = 0.0
+        else:
+            norm = self.rv_norm - 6.0
+        return norm * direct
+
+        if self.rv_norm <= 2.0:
+            return np.array([[0.0], [0.0]])
+        time = self.t - self.stopStartTime
+        coeff = max(0.0, 1.0 - time * self.stopRate)
+        return coeff * self.rv
+
+    def computeControlKeep(self):
+        return self.rv
+
     def computeControl(self):
-        self.base = np.array([[0.0], [0.0]])
-        self.target = np.array([[4.5], [0.5]])
         rot = self.rotation(self.x[2, 0])
         self.rv = np.dot(rot, self.lv)
         self.rv_norm = self.computeNorm(self.rv)
 
-        xy_cont = self.computeControlDecoupled()
-        return np.dot(rot.T, xy_cont), 0.0
+        xy_cont = self.controller()
+        return np.dot(rot.T, xy_cont), self.Kp_psi * (-self.x[2, 0])
 
-        wp = self.next_wp()
-        if wp is not None:
-            target = np.array([wp]).T
-            target_vel = np.array([self.next_vel()]).T
-            #xy_P = self.Kp_xy * np.dot(rot, self.normalizeVect(target - self.x[0:2, 0]))
-            xy_vect = np.dot(rot, target - self.x[0:2, 0])
-            xy_norm = math.sqrt(np.dot(xy_vect.T, xy_vect)[0, 0])
-            xy_dir = xy_vect / xy_norm
-            xy_P = (self.Kp_xy + self.Kp_xy_sq * xy_norm) * xy_vect
-            xy_D = self.Kd_xy * np.dot(rot, target_vel - self.lv)
-            return xy_P + xy_D, 0.0  # self.Kp_psi * (-self.x[2, 0])
-        else:
-            return np.zeros(2,1), 0.0
+        # wp = self.next_wp()
+        # if wp is not None:
+        #     target = np.array([wp]).T
+        #     target_vel = np.array([self.next_vel()]).T
+        #     #xy_P = self.Kp_xy * np.dot(rot, self.normalizeVect(target - self.x[0:2, 0]))
+        #     xy_vect = np.dot(rot, target - self.x[0:2, 0])
+        #     xy_norm = math.sqrt(np.dot(xy_vect.T, xy_vect)[0, 0])
+        #     xy_dir = xy_vect / xy_norm
+        #     xy_P = (self.Kp_xy + self.Kp_xy_sq * xy_norm) * xy_vect
+        #     xy_D = self.Kd_xy * np.dot(rot, target_vel - self.lv)
+        #     return xy_P + xy_D, 0.0  # self.Kp_psi * (-self.x[2, 0])
+        # else:
+        #     return np.zeros(2,1), 0.0
 
     def get_markers(self):
         '''
@@ -158,6 +201,17 @@ class UserCode:
         if (self.x[0] - wp[0])**2 + (self.x[1] - wp[1])**2 <= self.wp_dist**2:
             print "Time %f: found waypoint %f, %f" % (self.t, wp[0], wp[1])
             self.wp_idx += 1
+
+    def verify_event(self):
+        if self.ev_idx == len(self.events):
+            return
+        cur_ev = self.events[self.ev_idx]
+        while cur_ev[0]():
+            cur_ev[1]()
+            self.ev_idx += 1
+            if self.ev_idx == len(self.events):
+                return
+            cur_ev = self.events[self.ev_idx]
 
     def rotation(self, yaw):
         '''
@@ -312,6 +366,7 @@ class UserCode:
         self.sigma = self.predictCovariance(self.sigma, F, self.Q);
 
         self.verify_wp()
+        self.verify_event()
 
         controls = self.computeControl()
         self.visualizeState()
