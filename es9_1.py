@@ -38,6 +38,7 @@ class UserCode:
         self.t = 0.0
 
         self.cap = 4.5
+        self.multCap = None
 
         self.waypoints = [
             # M
@@ -88,13 +89,13 @@ class UserCode:
             [9.0, 9.5],
             [9.5, 11.0],
             [9.5, 12.0],
-            [8.0, 11.0],
             [5.5, 10.0],
+            [6.5, 11.0],
         ]
         self.real_next_wp = [
             2, 2, 2, 4, 4, 6, 6,
             7, 9, 9, 11, 11, 13, 13,
-            14, 16, 16, 18, 18
+            14, 16, 16, 17, 18
             ]
         self.wp_vel = [
             # M
@@ -185,8 +186,11 @@ class UserCode:
     def normalizeVect(self, x):
         return x / math.sqrt(np.dot(x.T, x)[0, 0])
 
-    def capVect(self, x, cap):
+    def capVect(self, x, cap, multCap=None):
         norm = math.sqrt(np.dot(x.T, x)[0, 0])
+        velNorm = math.sqrt(np.dot(self.rv.T, self.rv)[0, 0])
+        if multCap is not None:
+            cap = min(cap, velNorm + multCap)
         if norm > cap:
             return x / norm * cap
         return x
@@ -326,12 +330,15 @@ class UserCode:
             xy_norm = math.sqrt(np.dot(xy_vect.T, xy_vect)[0, 0])
             xy_dir = xy_vect / xy_norm
             xy_P = (self.Kp_xy + self.Kp_xy_sq * xy_norm) * xy_vect
-            xy_D = self.Kd_xy * (np.dot(rot, target_vel) - linear_velocity)
+            real_vel = (np.dot(rot, target_vel) - linear_velocity)
+            xy_D = self.Kd_xy * real_vel
+            self.rv = real_vel
             controls = xy_P + xy_D, 0.0  # self.Kp_psi * (-self.x[2, 0])
         else:
+            self.rv = 0.0
             controls = np.zeros(2,1), 0.0
 
-        controls = (self.capVect(controls[0], self.cap), controls[1])
+        controls = (self.capVect(controls[0], self.cap, self.multCap), controls[1])
         #print controls[0], controls[1]
         return controls
 
